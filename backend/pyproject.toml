@@ -1,0 +1,30 @@
+[project]
+name = "tcg"
+version = "0.1.0"
+description = "Temporal Code Graph: structure and history of a repository in one interval-stamped graph"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "tree-sitter>=0.23",
+  "tree-sitter-language-pack>=0.7",
+  "networkx>=3.3",
+  "rank-bm25>=0.2.2",
+  "tiktoken>=0.7",
+  "httpx>=0.27",
+  "numpy>=1.26",
+  "scipy>=1.13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tcg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
