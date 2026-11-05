@@ -160,10 +160,10 @@ export default function GraphView({ ws }: { ws: WS }) {
     const f = fg.current
     if (!f) return
     const charge = f.d3Force('charge') as { strength: (v: number) => unknown; distanceMax?: (v: number) => unknown } | undefined
-    charge?.strength(effGran === 'modules' ? -1800 : effGran === 'files' ? -140 : -38)
-    charge?.distanceMax?.(effGran === 'modules' ? 3000 : 420)
+    charge?.strength(effGran === 'modules' ? -700 : effGran === 'files' ? -140 : -38)
+    charge?.distanceMax?.(effGran === 'modules' ? 1500 : 420)
     const link = f.d3Force('link') as { distance: (fn: (l: VLink) => number) => { strength: (fn: (l: VLink) => number) => unknown } } | undefined
-    link?.distance((l) => (effGran === 'modules' ? 260 : l.kind === 'contains' ? 14 : l.kind === 'cochange' ? 70 : effGran === 'files' ? 80 : 42))
+    link?.distance((l) => (effGran === 'modules' ? 200 : l.kind === 'contains' ? 14 : l.kind === 'cochange' ? 70 : effGran === 'files' ? 80 : 42))
       .strength((l) => (effGran === 'modules' ? 0.03 : l.kind === 'contains' ? 0.9 : l.kind === 'cochange' ? 0.04 : 0.12))
     f.d3Force('cluster', grouping && mode.kind === 'map' && effGran !== 'modules' ? clusterForce(effGran === 'files' ? 0.12 : 0.2) as never : null)
     f.d3Force('collide', effGran === 'modules' ? collideForce(90) as never : null)
@@ -299,15 +299,17 @@ export default function GraphView({ ws }: { ws: WS }) {
     return (l.fresh || l.ghost ? base + 1.4 : base) + focused
   }, [effGran, edgeDir, pathEdges])
 
+  const hullStyle = useMemo(() => ({ color: commColor, label: (c: number) => model.label(c), ink: C['shadow-c'], line: C.line, hexA }), [commColor, model, C])
   const onRenderPre = useCallback((ctx: CanvasRenderingContext2D, scale: number) => {
     if (!grouping || mode.kind !== 'map' || effGran === 'modules') return
-    drawHulls(ctx, data.nodes, scale, { color: commColor, label: (c) => model.label(c), ink: C['shadow-c'], line: C.line, hexA }, null)
-  }, [grouping, mode.kind, effGran, data, commColor, model, C])
+    drawHulls(ctx, data.nodes, scale, hullStyle, null, 'shapes')
+  }, [grouping, mode.kind, effGran, data, hullStyle])
 
   const onRenderPost = useCallback((ctx: CanvasRenderingContext2D, scale: number) => {
+    if (grouping && mode.kind === 'map' && effGran !== 'modules') drawHulls(ctx, data.nodes, scale, hullStyle, null, 'labels')
     if (path) drawPathBadges(ctx, path.nodes, byId, scale, C.line)
     if (flow) drawHeaders(ctx, flow.headers, scale, C.ink)
-  }, [path, flow, byId, C])
+  }, [path, flow, byId, C, grouping, mode.kind, effGran, data, hullStyle])
 
   // ---------------------------------------------------------------- navigation helpers
   const flyTo = useCallback((id: string, select = true) => {
@@ -390,7 +392,7 @@ export default function GraphView({ ws }: { ws: WS }) {
       if (!full && document.fullscreenElement) document.exitFullscreen?.().catch(() => undefined)
     } catch { /* fullscreen API unavailable: the overlay still fills the window */ }
     document.body.style.overflow = full ? 'hidden' : ''
-    const t = setTimeout(() => fg.current?.zoomToFit(500, 60), 350)
+    const t = setTimeout(() => fg.current?.zoomToFit(500, 60), 650)
     return () => clearTimeout(t)
   }, [full])
   useEffect(() => {

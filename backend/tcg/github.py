@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -26,12 +27,31 @@ def parse_source(text: str) -> dict:
             "url": f"https://github.com/{owner}/{repo}.git",
             "name": f"{owner}/{repo}",
         }
-    p = Path(os.path.expanduser(s))
-    if p.is_dir() and (p / ".git").exists():
-        name = p.resolve().name
-        return {"kind": "local", "owner": "local", "repo": name, "id": f"local__{name}".lower(),
-                "path": str(p.resolve()), "name": name}
-    raise ValueError("Enter a GitHub URL (github.com/owner/repo), owner/repo, or a local git repository path")
+    if s.startswith(("/", "~", ".")) or os.sep in s:
+        return _local_source(s)
+    raise ValueError("Enter a GitHub URL (github.com/owner/repo), owner/repo, or the full path of a local git repository")
+
+
+def _local_source(s: str) -> dict:
+    """A local path: any folder inside a git repository with at least one commit."""
+    p = Path(os.path.expanduser(s)).resolve()
+    if not p.exists():
+        raise ValueError(f"No such folder: {p}")
+    if not p.is_dir():
+        raise ValueError(f"{p} is a file. Enter the folder of a git repository.")
+    top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode != 0:
+        raise ValueError(
+            f"{p} is not inside a git repository. TCG Studio builds the graph from commit history, so run "
+            f"`git init && git add -A && git commit -m \"Initial commit\"` in that folder first."
+        )
+    root = Path(top.stdout.strip())
+    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"], capture_output=True, text=True)
+    if head.returncode != 0:
+        raise ValueError(f"{root} is a git repository with no commits yet. Make a first commit, then build again.")
+    name = root.name
+    return {"kind": "local", "owner": "local", "repo": name, "id": f"local__{name}".lower(),
+            "path": str(root), "name": name, "subdir": str(p.relative_to(root)) if p != root else ""}
 
 
 def fetch_meta(owner: str, repo: str) -> dict:
