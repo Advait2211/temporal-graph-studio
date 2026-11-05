@@ -82,7 +82,7 @@ export default function Home() {
                   ))}
                 </div>
               </div>
-              <span className="muted" style={{ fontSize: 12.5 }}>Python · JS · TS · Go · Java. Local paths work too.</span>
+              <span className="muted" style={{ fontSize: 12.5 }}>Python · JS · TS · Go · Java. Local git repos work too: paste the full path.</span>
             </div>
             {err && <div className="err">{err}</div>}
             <div className="row wrap" style={{ gap: 8 }}>

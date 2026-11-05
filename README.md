@@ -10,7 +10,9 @@ A local web app for the **temporal code graph** (TCG) from our survey and propos
    **validity intervals `[s, f)`** over commits, plus co-change edges and a change prior computed
    only from ancestors of τ (leakage-safe),
 4. serves a neo-brutalist UI with these views:
-   - **Graph:** scrub G<sub>τ</sub> through time and watch edges open (lime) and close (red).
+   - **Graph:** opens on a module map you can drill into; scrub G<sub>τ</sub> through time or compare
+     two commits; hover cards, right-click actions, dependency-flow view, path finder, fullscreen
+     and a built-in legend (`?`).
    - **Stats:** growth, hidden coupling, churn hotspots, god nodes, communities, edge lifetimes and activity.
    - **Timeline:** per-commit Δ<sub>t</sub>, plus the edges and symbols each commit opened or closed.
    - **Retrieve:** issue → seeds → time-aware personalised PageRank → token-budgeted context, side by side with a static-only ablation.
@@ -31,7 +33,13 @@ cd frontend && npm install && npx vite
 
 Needs `git`, `uv` and Node 20+. Set `GITHUB_TOKEN` to lift the GitHub API's 60 requests per hour
 limit (only used for stars, languages and contributors). Graphs and clones are cached in
-`~/.cache/tcg-studio` (override with `TCG_HOME`). Local repository paths work in the URL box too.
+`~/.cache/tcg-studio` (override with `TCG_HOME`).
+
+**Local repositories:** paste the full path of any folder inside a git repository (for example
+`/Users/you/projects/app` or `~/projects/app/src`). It needs at least one commit, and only
+committed history is used. A plain folder that isn't a git repo is refused with instructions;
+run `git init && git add -A && git commit -m "Initial commit"` there first. The time slider fills
+in as you keep committing and click Rebuild.
 
 Languages: Python, JavaScript, TypeScript, Go and Java.
 
@@ -61,3 +69,5 @@ frontend/src/
   features/stats    dashboard
   features/{timeline,retrieve,report}
 ```
+
+A plain-language walkthrough of the idea and the code is in [`docs/EXPLAINER.md`](docs/EXPLAINER.md).

@@ -121,3 +121,37 @@ def test_no_leakage_from_future_commits(built):
 
 def _edge_alive(edges, src, dst):
     return any(e[0] == src and e[1] == dst for e in edges)
+
+
+def test_parse_source_local_paths(toy, tmp_path):
+    from tcg.github import parse_source
+
+    src = parse_source(str(toy))
+    assert src["kind"] == "local" and src["path"] == str(toy.resolve())
+    sub = toy / "pkg"
+    sub.mkdir(exist_ok=True)
+    assert parse_source(str(sub))["path"] == str(toy.resolve())  # a subfolder resolves to its repo
+    with pytest.raises(ValueError, match="not inside a git repository"):
+        parse_source(str(tmp_path))
+    with pytest.raises(ValueError, match="No such folder"):
+        parse_source(str(tmp_path / "missing"))
+    assert parse_source("pallets/flask")["id"] == "pallets__flask"
+
+
+def test_single_commit_repo_builds(tmp_path):
+    """`git init` + one commit (what the UI tells people to do) must build and analyse cleanly."""
+    from tcg import analysis
+
+    repo = tmp_path / "one"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "Test")
+    for name, body in C1.items():
+        (repo / name).write_text(body)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "only")
+    res = Builder(repo).build(50)
+    stats = analysis.analyze(res)
+    assert len(res.commits) == 1
+    assert stats["kpis"]["symbols"] == 4 and stats["kpis"]["commits"] == 1

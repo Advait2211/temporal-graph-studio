@@ -34,7 +34,8 @@ export interface HullStyle {
  * One soft, padded hull per community behind its nodes, with a sticker label on top.
  * The padding comes from stroking the hull with a thick round-joined line.
  */
-export function drawHulls(ctx: CanvasRenderingContext2D, nodes: VNode[], scale: number, st: HullStyle, focus: Set<number> | null) {
+export function drawHulls(ctx: CanvasRenderingContext2D, nodes: VNode[], scale: number, st: HullStyle, focus: Set<number> | null,
+  part: 'shapes' | 'labels' = 'shapes') {
   const groups = new Map<number, Pt[]>()
   for (const n of nodes) {
     if (n.ghost || n.ext || n.x === undefined || n.y === undefined || n.c < 0) continue
@@ -47,6 +48,10 @@ export function drawHulls(ctx: CanvasRenderingContext2D, nodes: VNode[], scale: 
     if (pts.length < 3) continue
     const hull = convexHull(pts)
     const pad = 16
+    let cx = 0, minY = Infinity
+    for (const [x, y] of pts) { cx += x; minY = Math.min(minY, y) }
+    labels.push({ x: cx / pts.length, y: minY - pad - 6 / scale, c, n: pts.length })
+    if (part === 'labels') continue
     const faded = focus && !focus.has(c)
     const col = st.color(c)
     ctx.save()
@@ -61,11 +66,9 @@ export function drawHulls(ctx: CanvasRenderingContext2D, nodes: VNode[], scale: 
     ctx.stroke()
     ctx.fill()
     ctx.restore()
-    let cx = 0, minY = Infinity
-    for (const [x, y] of pts) { cx += x; minY = Math.min(minY, y) }
-    labels.push({ x: cx / pts.length, y: minY - pad - 6 / scale, c, n: pts.length })
   }
-  // labels last so they sit above every hull
+  if (part === 'shapes') return
+  // labels are drawn after the nodes so node labels never cover them
   for (const l of labels) {
     const faded = focus && !focus.has(l.c)
     const text = st.label(l.c)
