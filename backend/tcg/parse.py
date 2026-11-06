@@ -28,6 +28,7 @@ EXT_LANG = {
     ".tsx": "tsx",
     ".go": "go",
     ".java": "java",
+    ".qasm": "openqasm",
 }
 
 LANG_LABEL = {
@@ -37,6 +38,7 @@ LANG_LABEL = {
     "tsx": "TypeScript",
     "go": "Go",
     "java": "Java",
+    "openqasm": "OpenQASM",
 }
 
 SKIP_PARTS = (
@@ -93,6 +95,7 @@ class Ref:
     src: str | None  # qual of enclosing def, None = module level
     name: str
     receiver: str | None = None  # "self", "this", or other receiver text
+    args: str = ""  # argument text, truncated (python only; feeds quantum gate / width detection)
 
 
 @dataclass
@@ -111,6 +114,7 @@ class FileFacts:
     refs: list[Ref] = field(default_factory=list)
     imports: list[Import] = field(default_factory=list)
     bases: list[tuple[str, str]] = field(default_factory=list)  # (class qual, base name)
+    qmeta: dict[str, dict] = field(default_factory=dict)  # quantum annotations by def qual ("" = module)
 
     def def_at(self, line: int) -> Def | None:
         """Innermost definition containing `line`."""
@@ -224,15 +228,17 @@ def _walk_python(node, ex: _Extractor, scope: str | None, in_class: bool):
             continue
         if tp == "call":
             fn = child.child_by_field_name("function")
+            argn = child.child_by_field_name("arguments")
+            args = ex.t(argn)[:80] if argn is not None else ""
             if fn is not None:
                 if fn.type == "identifier":
-                    ex.facts.refs.append(Ref(scope, ex.t(fn)))
+                    ex.facts.refs.append(Ref(scope, ex.t(fn), None, args))
                 elif fn.type == "attribute":
                     attr = fn.child_by_field_name("attribute")
                     obj = fn.child_by_field_name("object")
                     if attr is not None:
                         recv = ex.t(obj) if obj is not None else None
-                        ex.facts.refs.append(Ref(scope, ex.t(attr), recv))
+                        ex.facts.refs.append(Ref(scope, ex.t(attr), recv, args))
         elif tp == "import_statement":
             for n in child.named_children:
                 if n.type == "dotted_name":
@@ -503,6 +509,13 @@ def parse_file(path: str, src: bytes, lang: str | None = None) -> FileFacts | No
     lang = lang or lang_for(path)
     if lang is None or len(src) > MAX_FILE_BYTES:
         return None
+    if lang == "openqasm":  # no Tree-sitter grammar: a line-oriented parser (qcode.py)
+        from .qcode import parse_qasm
+
+        try:
+            return parse_qasm(path, src)
+        except Exception:
+            return None
     try:
         tree = _parser(lang).parse(src)
     except Exception:
@@ -511,6 +524,9 @@ def parse_file(path: str, src: bytes, lang: str | None = None) -> FileFacts | No
     root = tree.root_node
     if lang == "python":
         _walk_python(root, ex, None, False)
+        from .qcode import python_qmeta
+
+        python_qmeta(ex.facts, src)
     elif lang in ("javascript", "typescript", "tsx"):
         _walk_js(root, ex, None, False)
     elif lang == "go":

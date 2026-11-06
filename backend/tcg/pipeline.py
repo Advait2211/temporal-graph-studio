@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import shutil
 import threading
 import time
@@ -158,9 +159,10 @@ def _write(src: dict, repo_dir: Path, depth: int, meta: dict, res, stats: dict, 
         )
         conn.executemany(
             "INSERT INTO nodes(key, root, kind, name, qual, path, lang, start, end_line, sig, doc, is_test, s, f,"
-            " community, pagerank) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " community, pagerank, qmeta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(n["key"], n["root"], n["kind"], n["name"], n["qual"], n["path"], n["lang"], n["start"], n["end_line"],
-              n["sig"], n["doc"], n["is_test"], n["s"], n["f"], n.get("community", -1), n.get("pagerank", 0.0))
+              n["sig"], n["doc"], n["is_test"], n["s"], n["f"], n.get("community", -1), n.get("pagerank", 0.0),
+              json.dumps(n["qmeta"]) if n.get("qmeta") else None)
              for n in res.nodes],
         )
         conn.executemany("INSERT INTO edges(src, dst, type, weight, s, f) VALUES (?,?,?,?,?,?)", res.edges)

@@ -101,6 +101,18 @@ export default function NodeDrawer({ ws, nodeKey, onClose, onPick, onFlow, onPat
 
           {info.sig && <pre className="code" style={{ whiteSpace: 'pre-wrap' }}>{info.sig}</pre>}
           {info.doc && <p className="muted" style={{ margin: 0, fontSize: 13 }}>{info.doc}</p>}
+          {info.qmeta && (
+            <div className="col" style={{ gap: 6 }}>
+              <div className="eyebrow" style={{ fontSize: 10 }}>
+                Quantum · {info.qmeta.framework}{info.qmeta.circuit ? ' circuit' : ''}{info.qmeta.qubits ? ` · ${info.qmeta.qubits} qubits` : ''}
+              </div>
+              <div className="row wrap" style={{ gap: 5 }}>
+                {Object.entries(info.qmeta.gates).sort((a, b) => b[1] - a[1]).map(([g, n]) => (
+                  <span key={g} className="badge fill-violet" style={{ height: 20, fontSize: 10.5 }}>{g} × {n}</span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {info.cochange.length > 0 && (
             <div>
