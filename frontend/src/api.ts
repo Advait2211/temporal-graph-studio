@@ -134,7 +134,121 @@ export interface Stats {
   biggest_commits: { t: number; sha: string; msg: string; author: string; delta: number }[]
   questions: string[]
   params: { lambda: number; K: number }
+  quantum?: QuantumStats | null
 }
+
+// ---------------------------------------------------------------------------- quantum
+
+export interface QMeta {
+  framework: string
+  gates: Record<string, number>
+  n_gates: number
+  two_qubit: number
+  measure: number
+  qubits: number
+  circuit: boolean
+}
+
+export interface QuantumStats {
+  kpis: { circuits: number; gates: number; two_qubit: number; measure: number; max_qubits: number; annotated: number
+    gate_defs: number; gates_delta: number; circuits_delta: number; ever_annotated: number }
+  frameworks: Record<string, number>
+  gate_mix: { gate: string; count: number }[]
+  growth: { t: number; circuits: number; gates: number; two_qubit: number; measure: number; max_qubits: number }[]
+  top: { key: string; name: string; path: string; kind: Kind; lang: string; framework: string; n_gates: number
+    two_qubit: number; measure: number; qubits: number; circuit: boolean; s: number; f: number | null }[]
+}
+
+export interface QWalkResult {
+  tau: number
+  sha: string
+  params: Record<string, number>
+  ranking: { rank: number; key: string; name: string; qual: string; kind: Kind; path: string; score: number; p0: number
+    ppr_rank: number | null; static_rank: number | null; moved: number | null; community: number; seed: string[] }[]
+  ppr_ranking: { rank: number; key: string; name: string; path: string; score: number; quantum_rank: number | null }[]
+  static_ranking: { rank: number; key: string; name: string; path: string; score: number; quantum_rank: number | null }[]
+  trajectory: ({ t: number; seed_mass: number } & Record<string, number>)[]
+  trajectory_keys: { key: string; name: string }[]
+  summary: { graph_nodes: number; graph_edges: number; seed_count: number; overlap_ppr: number; overlap_static: number
+    overlap_ppr_static: number; spread_nodes: number; qubits_equivalent: number }
+}
+
+export interface QCircuitStats { qubits: number; depth: number; cx: number; gates: number; pauli_terms?: number; ops?: Record<string, number> }
+
+export interface QCircuitResult {
+  tau: number
+  qubits: number
+  t_max: number
+  times: number[]
+  reps: number
+  shots: number
+  nodes: { index: number; bits: string; key: string | null; name: string; kind: Kind | null; seed: boolean; p0: number
+    exact: number; trotter: number; sampled: number }[]
+  stats: QCircuitStats
+  tvd_sampled_exact: number
+  tvd_trotter_exact: number
+  circuit_text: string
+}
+
+export interface QSolution { selection: number[]; value: number; tokens: number; feasible: boolean; ratio: number | null
+  feasible_fraction?: number; p_opt?: number; most_likely?: number[] }
+
+export interface QPackResult {
+  tau: number
+  budget: number
+  body_budget: number
+  rho: number
+  ranking: 'quantum' | 'ppr'
+  mu: number
+  qubits: number
+  candidates_k: number
+  slack_bits: number
+  reps: number
+  penalty: number
+  unit_tokens: number
+  candidates: { key: string; name: string; path: string; kind: Kind; score: number; tokens: number; units: number
+    cochange: { with: string; w: number }[] }[]
+  solutions: { greedy: QSolution; random: QSolution; exact: QSolution; qaoa: QSolution }
+  noisy: { noise_p: number; value: number; ratio: number | null; feasible_fraction: number; p_opt: number
+    selection: number[]; shots: number } | null
+  convergence: number[]
+  angles: { gamma: number[]; beta: number[] }
+  circuit: QCircuitStats
+  packed: { key: string; mode: 'body' | 'signature'; tokens: number; text: string }[]
+  tokens: { used: number; body: number; signature: number; budget: number }
+}
+
+export type QecCode = 'bitflip' | 'phaseflip' | 'shor'
+export type QecChannel = 'bit' | 'phase' | 'depol'
+
+export interface QecResult {
+  tau: number
+  code: QecCode
+  channel: QecChannel
+  p: number
+  shots: number
+  logical_qubits: number
+  physical_qubits: number
+  data_qubits: number
+  t_max: number
+  nodes: { index: number; bits: string; key: string | null; name: string; kind: Kind | null; seed: boolean
+    ideal: number; noisy: number; qec: number }[]
+  metrics: { tvd_noisy: number; tvd_qec: number; fidelity_noisy: number; fidelity_qec: number
+    kendall_noisy: number | null; kendall_qec: number | null; top1_noisy: boolean; top1_qec: boolean }
+  syndromes: { label: string; count: number; frac: number }[]
+  circuit_text: string
+  seconds: number
+}
+
+export interface QecSweep {
+  code: QecCode
+  channel: QecChannel
+  rows: { p: number; unprotected: number; protected: number; theory: number | null }[]
+  breakeven: number | null
+  physical_qubits: number
+}
+
+type QBase = { issue: string; tau?: number; params?: Record<string, number> }
 
 export interface TNode {
   id: string
@@ -189,6 +303,7 @@ export interface SymbolInfo {
   prior_series: { t: number; h: number }[]
   prior: number
   code: string | null
+  qmeta?: QMeta | null
 }
 
 export interface CommitInfo {
@@ -263,6 +378,16 @@ export const api = {
   retrieve: (id: string, body: { issue: string; tau?: number; budget: number; params: Record<string, number> }) =>
     req<RetrieveResult>(`/api/repos/${id}/retrieve`, { method: 'POST', body: JSON.stringify(body) }),
   report: (id: string) => req<{ markdown: string }>(`/api/repos/${id}/report`),
+  qwalk: (id: string, body: QBase) =>
+    req<QWalkResult>(`/api/repos/${id}/quantum/walk`, { method: 'POST', body: JSON.stringify(body) }),
+  qcircuit: (id: string, body: QBase & { qubits: number; t?: number; reps: number; shots: number }) =>
+    req<QCircuitResult>(`/api/repos/${id}/quantum/circuit`, { method: 'POST', body: JSON.stringify(body) }),
+  qpack: (id: string, body: QBase & { budget: number; k: number; reps: number; ranking: 'quantum' | 'ppr'; mu: number; noise_p: number }) =>
+    req<QPackResult>(`/api/repos/${id}/quantum/pack`, { method: 'POST', body: JSON.stringify(body) }),
+  qec: (id: string, body: QBase & { qubits: number; code: QecCode; channel: QecChannel; p: number; shots: number }) =>
+    req<QecResult>(`/api/repos/${id}/quantum/qec`, { method: 'POST', body: JSON.stringify(body) }),
+  qecSweep: (code: QecCode, channel: QecChannel) =>
+    req<QecSweep>(`/api/quantum/qec/sweep?code=${code}&channel=${channel}`),
 }
 
 export function streamBuild(id: string, onEvent: (s: BuildSnapshot) => void): () => void {

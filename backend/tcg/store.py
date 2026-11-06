@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS commits (
 CREATE TABLE IF NOT EXISTS nodes (
   id INTEGER PRIMARY KEY, key TEXT, root TEXT, kind TEXT, name TEXT, qual TEXT, path TEXT, lang TEXT,
   start INTEGER, end_line INTEGER, sig TEXT, doc TEXT, is_test INTEGER, s INTEGER, f INTEGER,
-  community INTEGER DEFAULT -1, pagerank REAL DEFAULT 0
+  community INTEGER DEFAULT -1, pagerank REAL DEFAULT 0, qmeta TEXT
 );
 CREATE TABLE IF NOT EXISTS edges (
   id INTEGER PRIMARY KEY, src TEXT, dst TEXT, type TEXT, weight REAL, s INTEGER, f INTEGER
@@ -53,6 +53,8 @@ def connect(repo_id: str, fresh: bool = False) -> sqlite3.Connection:
     conn = sqlite3.connect(p, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    if "qmeta" not in {r[1] for r in conn.execute("PRAGMA table_info(nodes)")}:  # graphs built before quantum support
+        conn.execute("ALTER TABLE nodes ADD COLUMN qmeta TEXT")
     return conn
 
 

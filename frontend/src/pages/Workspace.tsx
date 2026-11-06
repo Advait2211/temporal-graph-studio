@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
-import { BarChart3, Download, FileText, GitCommitHorizontal, Home, Loader2, Network, RefreshCw, Search } from 'lucide-react'
+import { Atom, BarChart3, Download, FileText, GitCommitHorizontal, Home, Loader2, Network, RefreshCw, Search } from 'lucide-react'
 import { api, type GithubMeta, type Stats, type Temporal } from '../api'
 import { Card, Github, ThemeToggle, Wordmark } from '../ui'
 import { compact, date, fmt } from '../lib/format'
@@ -10,6 +10,7 @@ import StatsView from '../features/stats/StatsView'
 import TimelineView from '../features/timeline/TimelineView'
 import RetrieveView from '../features/retrieve/RetrieveView'
 import ReportView from '../features/report/ReportView'
+import QuantumView from '../features/quantum/QuantumView'
 
 export interface WS {
   repoId: string
@@ -29,6 +30,7 @@ const TABS = [
   { id: 'stats', label: 'Stats', icon: BarChart3, k: 'S' },
   { id: 'timeline', label: 'Timeline', icon: GitCommitHorizontal, k: 'T' },
   { id: 'retrieve', label: 'Retrieve', icon: Search, k: 'R' },
+  { id: 'quantum', label: 'Quantum', icon: Atom, k: 'Q' },
   { id: 'report', label: 'Report', icon: FileText, k: 'P' },
 ]
 
@@ -133,6 +135,7 @@ export default function Workspace() {
           : tab === 'timeline' ? <TimelineView ws={ws} />
           : tab === 'retrieve' ? <RetrieveView ws={ws} />
           : tab === 'report' ? <ReportView ws={ws} />
+          : tab === 'quantum' ? <QuantumView ws={ws} />
           : <GraphView ws={ws} />}
       </main>
     </div>

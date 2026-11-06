@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import gitio, history, pipeline, report, retrieve, store
+from . import gitio, history, pipeline, qec, qpack, qwalk, report, retrieve, store
 from .parse import parse_file
 
 app = FastAPI(title="TCG Studio", version="0.1.0")
@@ -302,6 +303,7 @@ def get_symbol(repo_id: str, key: str, tau: int | None = None):
         "out": [dict(e) for e in out_e], "in": [dict(e) for e in in_e],
         "cochange": partners[:12], "prior_series": prior_series,
         "prior": prior_series[-1]["h"] if prior_series else 0, "code": code,
+        "qmeta": json.loads(r["qmeta"]) if "qmeta" in r.keys() and r["qmeta"] else None,
     }
 
 
@@ -318,6 +320,85 @@ def do_retrieve(repo_id: str, req: RetrieveReq):
     if not req.issue.strip():
         raise HTTPException(400, "Paste an issue, a question, or a stack trace")
     return retrieve.retrieve(repo_id, req.issue, req.tau, req.budget, req.params)
+
+
+# ---------------------------------------------------------------------------- quantum
+
+
+class QWalkReq(BaseModel):
+    issue: str
+    tau: int | None = None
+    params: dict = Field(default_factory=dict)
+
+
+class QCircuitReq(QWalkReq):
+    qubits: int = Field(3, ge=2, le=5)
+    t: float | None = Field(None, gt=0, le=20)
+    reps: int = Field(2, ge=1, le=6)
+    shots: int = Field(4096, ge=128, le=20000)
+
+
+class QPackReq(QWalkReq):
+    budget: int = Field(4000, ge=256, le=64000)
+    k: int = Field(10, ge=2, le=14)
+    reps: int = Field(2, ge=1, le=5)
+    ranking: str = Field("quantum", pattern="^(quantum|ppr)$")
+    mu: float = Field(0.3, ge=0, le=3)
+    noise_p: float = Field(0.0, ge=0, le=0.2)
+
+
+class QecReq(QWalkReq):
+    qubits: int = Field(2, ge=1, le=3)
+    t: float | None = Field(None, gt=0, le=20)
+    code: str = Field("bitflip", pattern="^(bitflip|phaseflip|shor)$")
+    channel: str = Field("bit", pattern="^(bit|phase|depol)$")
+    p: float = Field(0.05, ge=0, le=0.5)
+    shots: int = Field(1024, ge=64, le=8192)
+
+
+# Every Qiskit / Aer call runs on this one long-lived thread. Qiskit 2.6's Rust extension allocates
+# with mimalloc's per-thread heaps; allocating from FastAPI's short-lived worker threads after another
+# worker has exited segfaults the process (reproduced: circuit, then pack, on two threads).
+_QUANTUM = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quantum")
+
+
+def _quantum(repo_id: str | None, issue: str | None, fn):
+    if repo_id is not None:
+        _conn(repo_id).close()
+    if issue is not None and not issue.strip():
+        raise HTTPException(400, "Paste an issue, a question, or a stack trace")
+    try:
+        return _QUANTUM.submit(fn).result()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/repos/{repo_id}/quantum/walk")
+def quantum_walk(repo_id: str, req: QWalkReq):
+    return _quantum(repo_id, req.issue, lambda: qwalk.walk(repo_id, req.issue, req.tau, req.params))
+
+
+@app.post("/api/repos/{repo_id}/quantum/circuit")
+def quantum_circuit(repo_id: str, req: QCircuitReq):
+    return _quantum(repo_id, req.issue, lambda: qwalk.circuit(repo_id, req.issue, req.tau, req.qubits, req.t, req.reps,
+                                                              req.shots, params=req.params))
+
+
+@app.post("/api/repos/{repo_id}/quantum/pack")
+def quantum_pack(repo_id: str, req: QPackReq):
+    return _quantum(repo_id, req.issue, lambda: qpack.pack(repo_id, req.issue, req.tau, req.budget, req.k, req.reps,
+                                                           req.ranking, req.mu, req.noise_p, params=req.params))
+
+
+@app.post("/api/repos/{repo_id}/quantum/qec")
+def quantum_qec(repo_id: str, req: QecReq):
+    return _quantum(repo_id, req.issue, lambda: qec.walk_qec(repo_id, req.issue, req.tau, req.qubits, req.t, req.code,
+                                                             req.channel, req.p, req.shots, params=req.params))
+
+
+@app.get("/api/quantum/qec/sweep")
+def quantum_qec_sweep(code: str = "bitflip", channel: str = "bit"):
+    return _quantum(None, None, lambda: qec.sweep(code, channel))
 
 
 @app.get("/api/repos/{repo_id}/export/report.md")

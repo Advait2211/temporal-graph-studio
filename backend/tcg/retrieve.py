@@ -11,6 +11,7 @@ The static-only ablation (α_cochange = β = 0) runs alongside for comparison.
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 import math
 import re
 import threading
@@ -21,7 +22,7 @@ from rank_bm25 import BM25Okapi
 import scipy.sparse as sp
 import tiktoken
 
-from . import gitio, history, store
+from . import gitio, history, qcode, store
 from .parse import parse_file
 
 _ENC = tiktoken.get_encoding("cl100k_base")
@@ -71,6 +72,16 @@ class _Snapshot:
         finally:
             conn.close()
         self.nodes = [dict(n) for n in nodes]
+        self.gate_index: dict[str, list[int]] = defaultdict(list)  # canonical gate -> nodes applying it
+        self.circuit_nodes: list[int] = []
+        for i, n in enumerate(self.nodes):
+            qm = n.get("qmeta")
+            n["qmeta"] = json.loads(qm) if isinstance(qm, str) and qm else None
+            if n["qmeta"]:
+                for g in n["qmeta"]["gates"]:
+                    self.gate_index[g].append(i)
+                if n["qmeta"].get("circuit"):
+                    self.circuit_nodes.append(i)
         self.idx = {n["key"]: i for i, n in enumerate(self.nodes)}
         self.root_key = {n["root"]: n["key"] for n in self.nodes}
         D = history.deltas(sym_rows)
@@ -197,6 +208,20 @@ def _seeds(S: _Snapshot, issue: str, m: int) -> dict[int, list[tuple[str, float,
                 if all(r[0] != "identifier" for r in seeds[i]):
                     seeds[i].append(("identifier", w, tokn))
 
+    # quantum vocabulary: gate names seed the definitions applying them; circuit words seed circuits
+    if S.gate_index or S.circuit_nodes:
+        words = {w.lower() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", issue)}
+        for wd in sorted(words):
+            g = qcode.GATE_WORDS.get(wd)
+            hits = S.gate_index.get(g, []) if g else []
+            for i in hits[:12]:
+                seeds[i].append(("quantum", 1.5 / math.sqrt(len(hits)), f"gate {g}"))
+        if words & qcode.CIRCUIT_WORDS and S.circuit_nodes:
+            k = len(S.circuit_nodes)
+            for i in S.circuit_nodes[:12]:
+                if all(r[0] != "quantum" for r in seeds[i]):
+                    seeds[i].append(("quantum", 0.6 / math.sqrt(k), "circuit"))
+
     # BM25 top-m
     if S.bm25 is not None:
         q = _tok(issue)
@@ -215,7 +240,8 @@ def _seeds(S: _Snapshot, issue: str, m: int) -> dict[int, list[tuple[str, float,
 # ---------------------------------------------------------------------------- ppr
 
 
-def _ppr(S: _Snapshot, p: np.ndarray, params: dict, use_history: bool) -> np.ndarray:
+def _mixed_weights(S: _Snapshot, params: dict, use_history: bool) -> sp.csr_matrix:
+    """W = Σ_r α_r A^(r) over structural edges, plus α_cochange · w_cc when history is on."""
     n = len(S.nodes)
     rows, cols, vals = [], [], []
 
@@ -247,7 +273,12 @@ def _ppr(S: _Snapshot, p: np.ndarray, params: dict, use_history: bool) -> np.nda
                 i, j = S.idx[ka], S.idx[kb]
                 add(i, j, a["alpha_cochange"] * w)
                 add(j, i, a["alpha_cochange"] * w)
-    W = sp.csr_matrix((vals, (rows, cols)), shape=(n, n))
+    return sp.csr_matrix((vals, (rows, cols)), shape=(n, n))
+
+
+def _ppr(S: _Snapshot, p: np.ndarray, params: dict, use_history: bool) -> np.ndarray:
+    a = params
+    W = _mixed_weights(S, a, use_history)
     out = np.asarray(W.sum(axis=1)).ravel()
     inv = np.divide(1.0, out, out=np.zeros_like(out), where=out > 0)
     P = sp.diags(inv) @ W
@@ -267,64 +298,112 @@ def _ppr(S: _Snapshot, p: np.ndarray, params: dict, use_history: bool) -> np.nda
 # ---------------------------------------------------------------------------- main
 
 
-def retrieve(repo_id: str, issue: str, tau: int | None, budget: int, params: dict | None = None) -> dict:
+def _personalisation(S: _Snapshot, seeds: dict, beta: float) -> np.ndarray:
+    """p(v) ∝ p0(v) · (1 + β h(v; τ)), falling back to the prior when nothing seeds."""
+    n = len(S.nodes)
+    p = np.zeros(n)
+    for i, rs in seeds.items():
+        p[i] = sum(w for _, w, _ in rs)
+    if p.sum() == 0:  # no evidence at all: fall back to the change prior
+        for i, nd in enumerate(S.nodes):
+            p[i] = S.prior.get(nd["root"], 0.0) if beta > 0 else 1.0
+        if p.sum() == 0:
+            p[:] = 1.0
+    if beta > 0:
+        h = np.array([S.prior.get(nd["root"], 0.0) for nd in S.nodes])
+        p = p * (1 + beta * h)
+    return p / p.sum()
+
+
+def units(S: _Snapshot) -> list[int]:
+    """Retrievable units: functions and methods."""
+    return [i for i, nd in enumerate(S.nodes) if nd["kind"] in ("function", "method")]
+
+
+def header(S: _Snapshot, i: int) -> str:
+    nd = S.nodes[i]
+    return f"# {nd['path']}:{S.spans.get(i, (nd['start'], nd['end_line']))[0]}\n"
+
+
+def _pack(S: _Snapshot, order: list[int], budget: int, rho: float, bodies: set[int] | None = None) -> dict:
+    """Full bodies up to ρ·B tokens, then signatures until B.
+
+    With `bodies` given (e.g. chosen by QAOA), exactly those units get full bodies and every other
+    unit in `order` competes for the remaining budget as a signature.
+    """
+    packed, used, body_tokens, sig_tokens = [], 0, 0, 0
+    body_limit = rho * budget
+    if bodies is not None:
+        for i in [i for i in order if i in bodies]:
+            body = S.body.get(i)
+            if body is None:
+                continue
+            text = header(S, i) + body
+            cost = ntok(text)
+            if used + cost > budget:
+                continue
+            packed.append({"key": S.nodes[i]["key"], "mode": "body", "tokens": cost, "text": text})
+            used += cost
+            body_tokens += cost
+    for i in order:
+        if used >= budget:
+            break
+        if bodies is not None and i in bodies:
+            continue
+        nd = S.nodes[i]
+        body = S.body.get(i)
+        if body is None:
+            continue
+        hd = header(S, i)
+        if bodies is None and used < body_limit:
+            cost = ntok(hd + body)
+            if used + cost <= budget:
+                packed.append({"key": nd["key"], "mode": "body", "tokens": cost, "text": hd + body})
+                used += cost
+                body_tokens += cost
+                continue
+        sig = nd["sig"] or body.splitlines()[0]
+        cost = ntok(hd + sig)
+        if used + cost > budget:
+            continue
+        packed.append({"key": nd["key"], "mode": "signature", "tokens": cost, "text": hd + sig})
+        used += cost
+        sig_tokens += cost
+    return {"packed": packed, "tokens": {"used": used, "body": body_tokens, "signature": sig_tokens, "budget": budget}}
+
+
+def prepare(repo_id: str, issue: str, tau: int | None, params: dict | None = None):
+    """Snapshot at τ, seeds for the issue and merged parameters: shared by every ranker."""
     conn = store.connect(repo_id)
     T = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
     conn.close()
     tau = T - 1 if tau is None else tau
     S = snapshot(repo_id, tau)
     a = {**DEFAULTS, **{k: float(v) for k, v in (params or {}).items() if k in DEFAULTS}}
-    n = len(S.nodes)
     seeds = _seeds(S, issue, int(a["m"]))
+    return S, seeds, a
 
-    def personalisation(beta: float) -> np.ndarray:
-        p = np.zeros(n)
-        for i, rs in seeds.items():
-            p[i] = sum(w for _, w, _ in rs)
-        if p.sum() == 0:  # no evidence at all: fall back to the change prior
-            for i, nd in enumerate(S.nodes):
-                p[i] = S.prior.get(nd["root"], 0.0) if beta > 0 else 1.0
-            if p.sum() == 0:
-                p[:] = 1.0
-        if beta > 0:
-            h = np.array([S.prior.get(nd["root"], 0.0) for nd in S.nodes])
-            p = p * (1 + beta * h)
-        return p / p.sum()
 
-    pi = _ppr(S, personalisation(a["beta"]), a, True)
-    pi_static = _ppr(S, personalisation(0.0), {**a, "alpha_cochange": 0.0}, False)
+def rankings(S: _Snapshot, seeds: dict, a: dict) -> tuple[np.ndarray, np.ndarray]:
+    """(full PPR scores, static-ablation PPR scores)."""
+    pi = _ppr(S, _personalisation(S, seeds, a["beta"]), a, True)
+    pi_static = _ppr(S, _personalisation(S, seeds, 0.0), {**a, "alpha_cochange": 0.0}, False)
+    return pi, pi_static
 
-    units = [i for i, nd in enumerate(S.nodes) if nd["kind"] in ("function", "method")]
-    order = sorted(units, key=lambda i: -pi[i])
-    order_static = sorted(units, key=lambda i: -pi_static[i])
+
+def retrieve(repo_id: str, issue: str, tau: int | None, budget: int, params: dict | None = None) -> dict:
+    S, seeds, a = prepare(repo_id, issue, tau, params)
+    n = len(S.nodes)
+    pi, pi_static = rankings(S, seeds, a)
+
+    us = units(S)
+    order = sorted(us, key=lambda i: -pi[i])
+    order_static = sorted(us, key=lambda i: -pi_static[i])
     rank_static = {i: r for r, i in enumerate(order_static)}
     rank_full = {i: r for r, i in enumerate(order)}
 
-    # budgeted packing
-    packed, used, body_tokens, sig_tokens = [], 0, 0, 0
-    body_limit = a["rho"] * budget
-    for i in order:
-        if used >= budget:
-            break
-        nd = S.nodes[i]
-        body = S.body.get(i)
-        if body is None:
-            continue
-        header = f"# {nd['path']}:{S.spans.get(i, (nd['start'], nd['end_line']))[0]}\n"
-        if used < body_limit:
-            cost = ntok(header + body)
-            if used + cost <= budget:
-                packed.append({"key": nd["key"], "mode": "body", "tokens": cost, "text": header + body})
-                used += cost
-                body_tokens += cost
-                continue
-        sig = nd["sig"] or body.splitlines()[0]
-        cost = ntok(header + sig)
-        if used + cost > budget:
-            continue
-        packed.append({"key": nd["key"], "mode": "signature", "tokens": cost, "text": header + sig})
-        used += cost
-        sig_tokens += cost
+    pk = _pack(S, order, budget, a["rho"])
+    packed = pk["packed"]
 
     def item(i: int, r: int) -> dict:
         nd = S.nodes[i]
@@ -370,7 +449,7 @@ def retrieve(repo_id: str, issue: str, tau: int | None, budget: int, params: dic
     return {
         "tau": S.tau, "sha": S.sha, "budget": budget, "params": a,
         "seeds": seed_list, "ranking": ranking, "static_ranking": static_ranking, "files": files,
-        "packed": packed, "tokens": {"used": used, "body": body_tokens, "signature": sig_tokens, "budget": budget},
+        "packed": packed, "tokens": pk["tokens"],
         "subgraph": {"nodes": sub_nodes, "links": sub_edges},
         "summary": {"graph_nodes": n, "graph_edges": len(S.edges), "cochange_edges": len(S.cochange),
                     "seed_count": len(seeds), "top10_overlap_with_static": overlap},
