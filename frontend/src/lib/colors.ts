@@ -13,5 +13,5 @@ export const EDGE_LABEL: Record<EdgeType | 'cochange', string> = {
 }
 
 export const LANG_COLOR: Record<string, string> = {
-  Python: 'var(--s1)', TypeScript: 'var(--s7)', JavaScript: 'var(--s4)', Go: 'var(--s3)', Java: 'var(--s2)',
+  Python: 'var(--s1)', TypeScript: 'var(--s7)', JavaScript: 'var(--s4)', Go: 'var(--s3)', Java: 'var(--s2)', OpenQASM: 'var(--s6)',
 }

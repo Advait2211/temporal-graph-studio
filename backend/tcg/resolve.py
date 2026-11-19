@@ -183,6 +183,12 @@ class Resolver:
                             for key in self.noext_by_base.get(posixpath.basename(b), ()):
                                 if key.endswith("/" + b):
                                     targets |= self.path_noext.get(key, set())
+            elif lang == "openqasm":
+                cand = posixpath.normpath(posixpath.join(here, imp.module))
+                if cand in self.files:
+                    targets.add(cand)
+                else:  # include by basename anywhere in the repo
+                    targets |= {p for p in self.files if p.endswith("/" + imp.module) or p == imp.module}
             elif lang == "go":
                 for d in self.dirs_by_base.get(posixpath.basename(imp.module), ()):
                     if d and (imp.module == d or imp.module.endswith("/" + d)):

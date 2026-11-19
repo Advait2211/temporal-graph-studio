@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import gitio
+from . import gitio, qcode
 from .parse import FileFacts, is_test_path, lang_for, parse_file
 from .resolve import EdgeKey, Resolver, node_key
 
@@ -56,6 +56,7 @@ class BuildResult:
     n_delta: list[int] = field(default_factory=list)
     code_files: list[int] = field(default_factory=list)
     timings: dict = field(default_factory=dict)
+    q_growth: list[dict] = field(default_factory=list)  # per-commit quantum aggregates (qcode.aggregate)
 
 
 class Builder:
@@ -70,6 +71,8 @@ class Builder:
         self.edges_by_dst: dict[str, set[EdgeKey]] = {}
         self.out_edges: dict[str, dict[EdgeKey, float]] = {}
         self.changes: list[tuple] = []
+        self.q_live: dict[str, dict] = {}  # live nodes carrying a quantum annotation
+        self.q_growth: list[dict] = []
         self.on_progress = on_progress or (lambda e: None)
         self.cancelled = cancelled or (lambda: False)
 
@@ -85,6 +88,7 @@ class Builder:
             d = facts.defs[qual]
             row = dict(key=key, kind=d.kind, name=d.name, qual=qual, path=facts.path, lang=facts.lang,
                        start=d.start, end_line=d.end, sig=d.signature, doc=d.doc)
+        self._set_qmeta(row, key, facts.qmeta.get(qual or ""))
         row["root"] = root or self.root_of.get(key) or key
         row["is_test"] = int(is_test_path(facts.path))
         row["s"], row["f"] = t, None
@@ -92,7 +96,15 @@ class Builder:
         self.node_open[key] = len(self.nodes)
         self.nodes.append(row)
 
+    def _set_qmeta(self, row: dict, key: str, qm: dict | None) -> None:
+        row["qmeta"] = qm
+        if qm:
+            self.q_live[key] = qm
+        else:
+            self.q_live.pop(key, None)
+
     def _close_node(self, key: str, t: int) -> None:
+        self.q_live.pop(key, None)
         i = self.node_open.pop(key, None)
         if i is not None:
             self.nodes[i]["f"] = t
@@ -102,6 +114,7 @@ class Builder:
         if i is None:
             return
         row = self.nodes[i]
+        self._set_qmeta(row, key, facts.qmeta.get(qual or ""))
         if qual is None:
             row["end_line"] = facts.lines
         else:
@@ -213,6 +226,7 @@ class Builder:
                                   "counters": self._counters(0, T)})
             n_delta.append(0)
             code_files.append(len(self.R.files))
+            self.q_growth.append(qcode.aggregate(0, self.q_live))
             t_snapshot = time.time() - t0
 
             # ---- walk c_1 .. c_{T-1}
@@ -223,6 +237,7 @@ class Builder:
                 delta = self._apply_commit(c, t, reader)
                 n_delta.append(delta)
                 code_files.append(len(self.R.files))
+                self.q_growth.append(qcode.aggregate(t, self.q_live))
                 if t % 3 == 0 or t == T - 1:
                     self.on_progress({"stage": "walk", "frac": t / max(1, T - 1),
                                       "message": f"{c.sha[:7]} {c.msg[:80]}", "commit": t,
@@ -230,7 +245,8 @@ class Builder:
         finally:
             reader.close()
         return BuildResult(commits, self.nodes, self.edges, self.changes, n_delta, code_files,
-                           {"snapshot_s": round(t_snapshot, 2), "total_s": round(time.time() - t0, 2)})
+                           {"snapshot_s": round(t_snapshot, 2), "total_s": round(time.time() - t0, 2)},
+                           q_growth=self.q_growth if self.q_live or any(g["annotated"] for g in self.q_growth) else [])
 
     def _counters(self, t: int, T: int) -> dict:
         return {"commits": t + 1, "total_commits": T, "files": len(self.R.files),

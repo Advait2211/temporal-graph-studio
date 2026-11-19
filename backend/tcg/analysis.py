@@ -9,7 +9,7 @@ import posixpath
 
 import networkx as nx
 
-from . import history
+from . import history, qcode
 from .builder import BuildResult
 from .parse import LANG_LABEL
 from .resolve import _is_aux
@@ -371,5 +371,6 @@ def analyze(res: BuildResult, lam: float = history.DEFAULT_LAMBDA, K: int = hist
         "biggest_commits": biggest_commits,
         "questions": questions,
         "params": {"lambda": lam, "K": K},
+        "quantum": qcode.quantum_stats(nodes, res.q_growth, T),
         "_cochange_contrib": contrib,  # stripped before storing as JSON
     }
